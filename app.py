@@ -83,12 +83,13 @@ def save_session_to_db(session_data):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     initial_level_to_save = session_data.get('initial_level', session_data.get('current_level'))
+    # MODIFIED: Use the selected interview_date and pass blank strings for name/id
     cursor.execute("""
         INSERT INTO sessions (learner_name, learner_id, language, interview_date, initial_level, final_level)
         VALUES (?, ?, ?, ?, ?, ?)
     """, (
-        session_data['learner_name'], session_data['learner_id'], session_data['language'],
-        datetime.datetime.now(), initial_level_to_save, session_data['final_level']
+        "", "", session_data['language'],
+        session_data['interview_date'], initial_level_to_save, session_data['final_level']
     ))
     session_id = cursor.lastrowid
     for task in session_data['tasks_completed']:
@@ -117,6 +118,9 @@ def calculate_final_level(current_level, tasks):
     is_minimal_base = base_yellow_or_better_count >= 4
 
     if current_level == 1:
+        # MODIFIED: Specific check for strong base + all probe breakdown
+        if is_strong_base and all_probes_are_breakdown:
+            return "1", "Strong base performance but breakdown on all probe tasks."
         if all_probes_are_breakdown:
             if base_orange_or_better_count >= 3:
                 return "0+", "Sustained partial performance at base with no performance on probes."
@@ -149,7 +153,8 @@ def initialize_state(force_reset=False):
             del st.session_state[key]
     if 'page' not in st.session_state:
         st.session_state.page = 'welcome'
-        st.session_state.learner_name = ''; st.session_state.learner_id = ''; st.session_state.language = ''
+        st.session_state.language = ''
+        st.session_state.interview_date = datetime.date.today()
         st.session_state.initial_level = None; st.session_state.current_level = None
         st.session_state.tasks_completed = []; st.session_state.final_level = None;
         st.session_state.final_reasoning = ""
@@ -199,16 +204,14 @@ def create_docx_report():
     document.add_heading('Speaking Proficiency Placement Assessment (SPPA) Report', 0)
 
     document.add_heading('Session Details', level=1)
-    document.add_paragraph(f"Learner Name: {st.session_state.learner_name}")
-    document.add_paragraph(f"Learner ID: {st.session_state.learner_id}")
+    # MODIFIED: Use interview_date instead of name/id
+    document.add_paragraph(f"Interview Date: {st.session_state.interview_date.strftime('%B %d, %Y')}")
     document.add_paragraph(f"Language: {st.session_state.language}")
     
     document.add_heading('Assessment Result', level=1)
-    p = document.add_paragraph()
-    p.add_run('Suggested Proficiency Level: ').bold = True
+    p = document.add_paragraph(); p.add_run('Suggested Proficiency Level: ').bold = True
     p.add_run(st.session_state.final_level)
-    p = document.add_paragraph()
-    p.add_run('Reasoning: ').bold = True
+    p = document.add_paragraph(); p.add_run('Reasoning: ').bold = True
     p.add_run(st.session_state.final_reasoning)
 
     document.add_heading('Task Performance Breakdown', level=1)
@@ -217,19 +220,12 @@ def create_docx_report():
             f"Task {i+1}: {task['name']} (Level {task['level']}) — Rating: {task['rating']}", 
             style='List Bullet'
         )
-        # Get notes from session state, defaulting to empty string
-        topic = st.session_state.get(f"topic_{i}", "")
-        prompt = st.session_state.get(f"prompt_{i}", "")
+        topic = st.session_state.get(f"topic_{i}", ""); prompt = st.session_state.get(f"prompt_{i}", "")
         comment = st.session_state.get(f"comment_{i}", "")
-        
-        document.add_paragraph(f"\tTopic: {topic}")
-        document.add_paragraph(f"\tTask Prompt: {prompt}")
+        document.add_paragraph(f"\tTopic: {topic}"); document.add_paragraph(f"\tTask Prompt: {prompt}")
         document.add_paragraph(f"\tComment on Learner Response: {comment}")
 
-    # Save document to a memory buffer
-    buffer = BytesIO()
-    document.save(buffer)
-    buffer.seek(0)
+    buffer = BytesIO(); document.save(buffer); buffer.seek(0)
     return buffer
 
 # --- UI Rendering Functions ---
@@ -238,12 +234,13 @@ def render_welcome_page():
     st.write("---")
     st.header("Student Info: Enter Session Information")
     
-    name = st.text_input("Learner Full Name", key="name_input")
-    id_val = st.text_input("Learner ID", key="id_input")
+    # MODIFIED: Removed name/id inputs, added date input
     lang = st.text_input("Language Being Assessed", key="lang_input")
+    date = st.date_input("Interview Date", key="date_input")
     
-    if st.button("Begin Session", disabled=not (name and id_val and lang)):
-        st.session_state.learner_name = name; st.session_state.learner_id = id_val; st.session_state.language = lang
+    if st.button("Begin Session", disabled=not (lang and date)):
+        st.session_state.language = lang
+        st.session_state.interview_date = date
         set_page('survey'); st.rerun()
 
 def render_survey_page():
@@ -269,12 +266,9 @@ def render_tasks_page():
     if not level:
         st.error("No level selected."); st.button("Back to Welcome", on_click=set_page, args=['welcome']); return
 
-    if level == 2:
-        st.markdown(f"<h1 style='color: green;'>Phase 2: Task Phase (Testing at Level {level})</h1>", unsafe_allow_html=True)
-    elif level == 3:
-        st.markdown(f"<h1 style='color: blue;'>Phase 2: Task Phase (Testing at Level {level})</h1>", unsafe_allow_html=True)
-    else:
-        st.title(f"Phase 2: Task Phase (Testing at Level {level})")
+    if level == 2: st.markdown(f"<h1 style='color: green;'>Phase 2: Task Phase (Testing at Level {level})</h1>", unsafe_allow_html=True)
+    elif level == 3: st.markdown(f"<h1 style='color: blue;'>Phase 2: Task Phase (Testing at Level {level})</h1>", unsafe_allow_html=True)
+    else: st.title(f"Phase 2: Task Phase (Testing at Level {level})")
     
     for i, task in enumerate(st.session_state.tasks_to_do):
         task_key = f"task_{i}_level_{level}"; st.subheader(f"Task {i+1}: {task['name']} (Level {task['level']} Function)")
@@ -294,37 +288,32 @@ def render_tasks_page():
     if st.button("Calculate Score", type="primary", disabled=not all_tasks_rated):
         if all(t.get('rating') == RATINGS[0] for t in st.session_state.tasks_to_do):
             st.error("Retest the learner with different level-appropriate questions or rate the learner at Level 0.")
-            if st.button("Clear All and Restart"):
-                initialize_state(force_reset=True); st.rerun()
+            if st.button("Clear All and Restart"): initialize_state(force_reset=True); st.rerun()
         else:
             st.session_state.tasks_completed.extend(st.session_state.tasks_to_do)
             st.session_state.tasks_to_do = []
             level, reason = calculate_final_level(st.session_state.current_level, st.session_state.tasks_completed)
             
-            if level == "INVALID":
-                st.error(reason)
+            if level == "INVALID": st.error(reason)
             elif "MOVE_TO" in level:
-                new_level = int(level[-1])
-                st.session_state.current_level = new_level
+                new_level = int(level[-1]); st.session_state.current_level = new_level
                 st.session_state.tasks_to_do = generate_task_list(new_level)
-                st.info(f"Performance warrants moving to Level {new_level}. Presenting new tasks.")
-                st.rerun()
+                st.info(f"Performance warrants moving to Level {new_level}. Presenting new tasks."); st.rerun()
             else:
-                st.session_state.final_level = level
-                st.session_state.final_reasoning = reason
+                st.session_state.final_level = level; st.session_state.final_reasoning = reason
                 save_session_to_db(st.session_state)
-                set_page('summary')
-                st.rerun()
+                set_page('summary'); st.rerun()
 
 def render_summary_page():
     st.title("Final Proficiency Assessment Summary")
-    # MODIFIED: Conditional display of balloons
     if not st.session_state.get('balloons_shown', False):
-        st.balloons()
-        st.session_state.balloons_shown = True
+        st.balloons(); st.session_state.balloons_shown = True
     
     st.header("Session Details")
-    st.write(f"**Learner Name:** {st.session_state.learner_name}"); st.write(f"**Learner ID:** {st.session_state.learner_id}"); st.write(f"**Language:** {st.session_state.language}")
+    # MODIFIED: Display interview_date instead of name/id
+    st.write(f"**Interview Date:** {st.session_state.interview_date.strftime('%B %d, %Y')}")
+    st.write(f"**Language:** {st.session_state.language}")
+    
     st.header("Assessment Result")
     st.metric(label="Suggested Proficiency Level", value=st.session_state.final_level)
     st.caption(f"Reasoning: {st.session_state.final_reasoning}")
@@ -332,13 +321,8 @@ def render_summary_page():
     
     for i, task in enumerate(st.session_state.tasks_completed):
         st.markdown(f"**Task {i+1}: {task['name']} (Level {task['level']}) — Rating: {task['rating']}**")
-        
-        topic_key = f"topic_{i}"
-        prompt_key = f"prompt_{i}"
-        comment_key = f"comment_{i}"
-
-        st.text_input("Topic:", key=topic_key)
-        st.text_area("Task Prompt:", key=prompt_key)
+        topic_key = f"topic_{i}"; prompt_key = f"prompt_{i}"; comment_key = f"comment_{i}"
+        st.text_input("Topic:", key=topic_key); st.text_area("Task Prompt:", key=prompt_key)
         st.text_area("Comment on Learner Response:", key=comment_key)
         st.write("---")
 
@@ -347,7 +331,7 @@ def render_summary_page():
     st.download_button(
         label="Download Report as .docx",
         data=report_buffer,
-        file_name=f"SPPA_Report_{st.session_state.learner_id}.docx",
+        file_name=f"SPPA_Report_{st.session_state.interview_date}.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
 
